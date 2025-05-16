@@ -23,7 +23,7 @@ namespace AutoMining
         // Add these new constants
         private const int COLOR_CHECK_INTERVAL_MIN = 1000;
         private const int COLOR_CHECK_INTERVAL_MAX = 5000;
-        private const int COLOR_SAMPLES_COUNT = 3;
+        private const int COLOR_SAMPLES_COUNT = 5;
         private const int DOCK_DELAY_MIN = 15000;
         private const int DOCK_DELAY_MAX = 30000;
 
@@ -38,10 +38,12 @@ namespace AutoMining
         // Context menu position offsets (modify these according to your context menu)
         private const int MenuXOffset = 407 - 390;  // Difference between right-click X and menu X
         private const int MenuYOffset = 910 - 850; // Difference between right-click Y and menu Y
-        private const int MenuItemWidth = 609 - 465; // Width of the menu item (537-367)
-        private const int MenuItemHeight = 965 - 946; // Height of the menu item (834-816)
+        private const int MenuItemWidth = 609 - 470; // Width of the menu item (537-367)
+        private const int MenuItemHeight = 965 - 950; // Height of the menu item (834-816)
 
-        private const int COLOR_TOLERANCE = 10;
+        private Color preDockColor;
+        private const int DOCK_VERIFICATION_DELAY = 60000; // 60 seconds
+        private Point dockCheckPoint;
 
         public Form1()
         {
@@ -86,7 +88,7 @@ namespace AutoMining
                     var color = bmp.GetPixel(0, 0);
                     colorSamples.Add(color);
 
-                    // Keep only last 3 samples
+                    // Keep only last 5 samples
                     if (colorSamples.Count > COLOR_SAMPLES_COUNT)
                         colorSamples.RemoveAt(0);
 
