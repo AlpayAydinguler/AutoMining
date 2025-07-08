@@ -1,7 +1,9 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -38,8 +40,8 @@ namespace AutoMining
         // Context menu position offsets (modify these according to your context menu)
         private const int MenuXOffset = 407 - 390;  // Difference between right-click X and menu X
         private const int MenuYOffset = 910 - 850; // Difference between right-click Y and menu Y
-        private const int MenuItemWidth = 609 - 470; // Width of the menu item (537-367)
-        private const int MenuItemHeight = 965 - 950; // Height of the menu item (834-816)
+        private const int MenuItemWidth = 609 - 475; // Width of the menu item (537-367)
+        private const int MenuItemHeight = 965 - 955; // Height of the menu item (834-816)
 
         private Color preDockColor;
         private const int DOCK_VERIFICATION_DELAY = 60000; // 60 seconds
@@ -130,6 +132,15 @@ namespace AutoMining
 
             try
             {
+                // Store dock check coordinates
+                dockCheckPoint = new Point(
+                    int.Parse(textBoxMiningModuleX.Text),
+                    int.Parse(textBoxMiningModuleY.Text)
+                );
+
+                // Capture initial color before docking
+                preDockColor = GetPixelColor(dockCheckPoint);
+
                 // Stop all timers
                 miningCheckTimer.Stop();
 
@@ -153,23 +164,87 @@ namespace AutoMining
                 HumanLikeMouseMove(target);
                 LeftClick();
                 UpdateStatus("Docking initiated");
+
+                // Wait for docking to complete
+                UpdateStatus("Waiting for docking verification...");
+                await Task.Delay(DOCK_VERIFICATION_DELAY);
+
+                // Verify docking
+                Color postDockColor = GetPixelColor(dockCheckPoint);
+                if (preDockColor != postDockColor)
+                {
+                    UpdateStatus("Docking successful - stopping automation");
+                    StopAllOperations();
+                    ShutdownComputer();
+                }
+                else
+                {
+                    UpdateStatus("Docking failed - initiating shutdown");
+                    ShutdownComputer();
+                }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Docking error: {ex.Message}");
-            }
-            finally
-            {
                 isDocking = false;
                 isMiningStopped = false;
                 colorSamples.Clear();
+            }
+        }
 
-                if (isRunning)
+        private Color GetPixelColor(Point point)
+        {
+            using (var bmp = new Bitmap(1, 1))
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(point, Point.Empty, new Size(1, 1));
+                return bmp.GetPixel(0, 0);
+            }
+        }
+
+        private void StopAllOperations()
+        {
+            if (InvokeRequired)
+            {
+                Invoke((MethodInvoker)StopAllOperations);
+                return;
+            }
+
+            isRunning = false;
+            isDocking = false;
+            buttonStartStopButton.Text = "Start";
+            actionTimer.Stop();
+            miningCheckTimer.Stop();
+            UpdateStatus("Stopped");
+        }
+
+        private void ShutdownComputer()
+        {
+            try
+            {
+                StopAllOperations();
+                UpdateStatus("Shutting down...");
+
+                if (IsUserAdministrator())
                 {
-                    actionTimer.Start();
-                    ResetMiningCheckTimer();
+                    Process.Start("shutdown", "/s /t 0");
+                }
+                else
+                {
+                    MessageBox.Show("Program needs administrator rights to shut down computer");
                 }
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Shutdown failed: {ex.Message}");
+            }
+        }
+
+        private bool IsUserAdministrator()
+        {
+            var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
 
         private void MouseTrackerTimer_Tick(object sender, EventArgs e)
@@ -263,6 +338,7 @@ namespace AutoMining
             Thread.Sleep(random.Next(500, 1000));
             LeftClick();
             Thread.Sleep(random.Next(500, 1000));
+            HumanLikeMouseMove(new Point(random.Next(1100,1300), random.Next(500, 700)));
         }
 
         private Rectangle GetCoordinates(string boxPrefix)
