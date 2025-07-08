@@ -1,11 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Threading;
 using System.Windows.Forms;
+using Tesseract;
+using System.Drawing.Imaging;
 
 namespace AutoMining
 {
@@ -21,6 +25,7 @@ namespace AutoMining
         private Random random = new Random();
         private Point rightClickPosition;
         private List<Color> colorSamples = new List<Color>();
+        private TesseractEngine tesseractEngine; // OCR engine
 
         // Add these new constants
         private const int COLOR_CHECK_INTERVAL_MIN = 1000;
@@ -41,7 +46,7 @@ namespace AutoMining
         private const int MenuXOffset = 407 - 390;  // Difference between right-click X and menu X
         private const int MenuYOffset = 910 - 850; // Difference between right-click Y and menu Y
         private const int MenuItemWidth = 609 - 475; // Width of the menu item (537-367)
-        private const int MenuItemHeight = 965 - 955; // Height of the menu item (834-816)
+        private const int MenuItemHeight = 965 - 949; // Height of the menu item (834-816)
 
         private Color preDockColor;
         private const int DOCK_VERIFICATION_DELAY = 60000; // 60 seconds
@@ -50,6 +55,19 @@ namespace AutoMining
         public Form1()
         {
             InitializeComponent();
+
+            // Initialize OCR engine
+            // Initialize OCR engine
+            try
+            {
+                tesseractEngine = new TesseractEngine(@"./tessdata", "eng", EngineMode.Default);
+                // Remove the character whitelist to allow numbers and symbols
+                // tesseractEngine.SetVariable("tessedit_char_whitelist", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"OCR initialization failed: {ex.Message}");
+            }
 
             // Existing initialization
             mouseTrackerTimer.Interval = 50;
@@ -332,13 +350,190 @@ namespace AutoMining
                 MenuItemHeight
             );
 
+            // Step 4.5: Check if "Compress" option is visible
+            if (!IsCompressOptionVisible(menuItemRect))
+            {
+                UpdateStatus("Compress option not found - initiating shutdown");
+
+                // If mining has stopped and compress option is missing, shut down
+                if (isMiningStopped)
+                {
+                    ShutdownComputer();
+                    return;
+                }
+
+                // Otherwise, just move mouse away and skip this cycle
+                UpdateStatus("Skipping compress - no ore");
+                HumanLikeMouseMove(new Point(random.Next(1100, 1300), random.Next(500, 700)));
+                LeftClick();
+                return;
+            }
+
             UpdateStatus("Moving to Context Menu");
             var target2 = GetRandomPointInRectangle(menuItemRect);
             HumanLikeMouseMove(target2);
             Thread.Sleep(random.Next(500, 1000));
             LeftClick();
             Thread.Sleep(random.Next(500, 1000));
-            HumanLikeMouseMove(new Point(random.Next(1100,1300), random.Next(500, 700)));
+            HumanLikeMouseMove(new Point(random.Next(1100, 1300), random.Next(500, 700)));
+        }
+
+        private bool IsCompressOptionVisible(Rectangle menuRect)
+        {
+            try
+            {
+                if (tesseractEngine == null)
+                {
+                    MessageBox.Show("OCR engine not initialized");
+                    return true;
+                }
+
+                // Capture a slightly larger area around the button
+                var captureRect = new Rectangle(
+                    menuRect.X - 10,
+                    menuRect.Y - 2,
+                    menuRect.Width + 20,
+                    menuRect.Height + 4 // Use constant height instead of rect.Height
+                );
+
+                // Draw debug rectangle (red color, 3 seconds)
+                //DrawDebugRectangle(captureRect, Color.Red, 3000);
+
+                // Capture the menu area
+                using (var bmp = new Bitmap(captureRect.Width, captureRect.Height))
+                {
+                    using (var g = Graphics.FromImage(bmp))
+                    {
+                        g.CopyFromScreen(captureRect.Location, Point.Empty, captureRect.Size);
+                    }
+
+                    // Preprocess image for better OCR
+                    using (var processed = PreprocessImage(bmp))
+                    {
+                        // Perform OCR
+                        using (var page = tesseractEngine.Process(processed))
+                        {
+                            string text = page.GetText();
+                            Debug.WriteLine($"OCR Output: {text}"); // Add this for debugging
+
+                            // Case-insensitive check for "compress"
+                            return text.IndexOf("compress", StringComparison.OrdinalIgnoreCase) >= 0;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"OCR Error: {ex.Message}");
+                return true;
+            }
+        }
+
+
+        // Add this method to draw a transparent overlay rectangle
+        private void DrawDebugRectangle(Rectangle rect, Color color, int durationMillis)
+        {
+            // Create a transparent form
+            var overlay = new Form()
+            {
+                FormBorderStyle = FormBorderStyle.None,
+                ShowInTaskbar = false,
+                TopMost = true,
+                BackColor = Color.Wheat, // Any color that's not the transparency key
+                TransparencyKey = Color.Wheat,
+                Opacity = 0.7,
+                StartPosition = FormStartPosition.Manual,
+                Bounds = Screen.PrimaryScreen.Bounds
+            };
+
+            // Draw the rectangle on the form
+            overlay.Paint += (s, e) =>
+            {
+                using (var pen = new Pen(color, 2))
+                {
+                    e.Graphics.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+                }
+
+                // Draw label
+                using (var font = new Font("Arial", 12))
+                using (var brush = new SolidBrush(color))
+                {
+                    e.Graphics.DrawString("OCR Area", font, brush, rect.X, rect.Y - 20);
+                }
+            };
+
+            // Show the overlay
+            overlay.Show();
+
+            // Auto-close after duration
+            var timer = new System.Windows.Forms.Timer();
+            timer.Interval = durationMillis;
+            timer.Tick += (s, e) =>
+            {
+                timer.Stop();
+                overlay.Close();
+                overlay.Dispose();
+            };
+            timer.Start();
+        }
+
+        private Pix PreprocessImage(Bitmap original)
+        {
+            // Convert to grayscale with higher contrast
+            using (var highContrast = new Bitmap(original.Width, original.Height))
+            {
+                for (int x = 0; x < original.Width; x++)
+                {
+                    for (int y = 0; y < original.Height; y++)
+                    {
+                        Color pixel = original.GetPixel(x, y);
+
+                        // Simple thresholding for better text recognition
+                        int avg = (pixel.R + pixel.G + pixel.B) / 3;
+                        int value = avg < 150 ? 0 : 255; // Adjust threshold as needed
+                        highContrast.SetPixel(x, y, Color.FromArgb(value, value, value));
+                    }
+                }
+
+                return BitmapToPix(highContrast);
+            }
+        }
+        // Debugging helper to visualize where the program is looking
+        private void DrawDebugRectangle(Rectangle rect)
+        {
+            try
+            {
+                using (var bmp = new Bitmap(rect.Width + 40, rect.Height + 40))
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.CopyFromScreen(rect.X - 20, rect.Y - 20, 0, 0, bmp.Size);
+                    using (var pen = new Pen(Color.Red, 2))
+                    {
+                        g.DrawRectangle(pen, 20, 20, rect.Width, rect.Height);
+                    }
+                    bmp.Save("debug_rectangle.png", System.Drawing.Imaging.ImageFormat.Png);
+                }
+            }
+            catch { /* Ignore errors */ }
+        }
+
+        private Bitmap PixToBitmap(Pix pix)
+        {
+            using (var memoryStream = new System.IO.MemoryStream())
+            {
+                pix.Save("temp_image.png", Tesseract.ImageFormat.Png); // Save Pix to a temporary file  
+                return new Bitmap("temp_image.png"); // Load the temporary file into a Bitmap  
+            }
+        }
+
+        private Pix BitmapToPix(Bitmap bitmap)
+        {
+            // Save the bitmap to a memory stream
+            using (var memoryStream = new System.IO.MemoryStream())
+            {
+                bitmap.Save(memoryStream, System.Drawing.Imaging.ImageFormat.Bmp);
+                return Pix.LoadFromMemory(memoryStream.ToArray());
+            }
         }
 
         private Rectangle GetCoordinates(string boxPrefix)
@@ -437,6 +632,9 @@ namespace AutoMining
             base.OnFormClosing(e);
             mouseTrackerTimer.Stop();
             actionTimer.Stop();
+
+            // Clean up OCR engine
+            tesseractEngine?.Dispose();
         }
     }
 }
